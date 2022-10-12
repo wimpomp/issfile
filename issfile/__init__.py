@@ -1,10 +1,10 @@
-import zipfile
 import re
 import pickle
 import xml.etree.ElementTree as ET
 import numpy as np
+from zipfile import ZipFile
 from struct import unpack
-from tiffwrite import IJTiffFile
+from tiffwrite import IJTiffFile, Tag
 from tqdm.auto import tqdm
 from itertools import product
 from yaml import safe_load
@@ -15,7 +15,7 @@ class IssFile:
     def __init__(self, file, version=388):
         self.file = file
         self.version = version
-        self.zip = zipfile.ZipFile(self.file)
+        self.zip = ZipFile(self.file)
         self.data = self.zip.open('data/PrimaryDecayData.bin')
         self.metadata = ET.fromstring(self.zip.read('dataProps/Core.xml'))
         dimensions = self.metadata.find('Dimensions')
@@ -33,6 +33,7 @@ class IssFile:
         self.points_per_orbit = particle_tracking['ScanCirclePointCount']
         self.orbits_per_cycle = particle_tracking['OrbitCountPerTrack']
         self.radius = particle_tracking['ScanRadius_um']
+        self.cycle_time = particle_tracking['TrackTime_ms']
         self.orbit_pxsize = self.radius * 2 * np.pi / self.points_per_orbit
         self.data_bytes_len = self.zip.getinfo('data/PrimaryDecayData.bin').file_size
         self.delta = self.data_bytes_len // (self.shape[0] * self.shape[1] * self.shape[2] *
@@ -49,7 +50,7 @@ class IssFile:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        self.zip = zipfile.ZipFile(self.file)
+        self.zip = ZipFile(self.file)
         self.data = self.zip.open('data/PrimaryDecayData.bin')
 
     def close(self):
@@ -70,21 +71,29 @@ class IssFile:
         return np.reshape(data, self.shape[:2])
 
     def get_carpet(self, c, t, min_n_lines=1):
-        assert c < self.shape[2] and t < self.shape[4],\
+        assert c < self.shape[2] and t < self.shape[4], \
             f'carpet {c = }, {t = } not in shape {self.shape[2]}, {self.shape[4]}'
         frame = c + (2 * t + 1) * self.shape[2]
         frame_bytes = self.shape[0] * self.shape[1] * self.delta
-        data = []
+        data, metadata = [], []
         self.data.seek(frame * frame_bytes)
         for i in range(frame_bytes // (2 * self.points_per_orbit * self.orbits_per_cycle)):
             line = [unpack('<H', self.data.read(2))[0] for _ in range(self.points_per_orbit * self.orbits_per_cycle)]
-            if self.version == 388:
-                _position_and_time = self.data.read(16)
             if np.any(line) or i < min_n_lines:
                 data.append(line)
+                if self.version >= 388:
+                    metadata.append(unpack('<ffff', self.data.read(16)))
+                else:
+                    metadata.append([i * self.cycle_time, 0, 0, 0])
             else:
                 break
-        return np.vstack(data).reshape((-1, self.points_per_orbit))
+
+        data, metadata = np.vstack(data), np.vstack(metadata)
+        times = metadata[:, 0].astype(int)
+        index = np.zeros(max(times) // self.cycle_time + 1, int)
+        for i, j in enumerate(times):
+            index[j // self.cycle_time] = i
+        return data[index], metadata[index].T
 
     @property
     def tiff_writer(self):
@@ -103,8 +112,15 @@ class IssFile:
             def compress_frame(self, frame):
                 if isinstance(self.iss, bytes):
                     self.iss = pickle.loads(self.iss)
-                frame = self.iss.get_carpet(*frame[1:]) if frame[0] else self.iss.get_image(*frame[1:])
-                return super().compress_frame(frame.astype(self.dtype))
+                if frame[0]:
+                    frame, metadata = self.iss.get_carpet(*frame[1:])
+                    ifd, offsets = super().compress_frame(frame.astype(self.dtype))
+                    # ISS = 9*19*19 = 3249; list of t, x, y, z for each row in carpet
+                    ifd[3249] = Tag('float', metadata.T.flatten())
+                    return ifd, offsets
+                else:
+                    frame = self.iss.get_image(*frame[1:])
+                    return super().compress_frame(frame.astype(self.dtype))
 
         return TiffFile
 

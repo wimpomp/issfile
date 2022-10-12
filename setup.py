@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='issfile',
-    version='2022.10.1',
+    version='2022.10.2',
     author='Wim Pomp @ Lenstra lab NKI',
     author_email='w.pomp@nki.nl',
     description='Open ISS files.',
