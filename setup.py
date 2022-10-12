@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='issfile',
-    version='2022.10.12',
+    version='2022.10.1',
     author='Wim Pomp @ Lenstra lab NKI',
     author_email='w.pomp@nki.nl',
     description='Open ISS files.',
@@ -19,6 +19,6 @@ setuptools.setup(
         'Operating System :: OS Independent',
     ],
     python_requires='>=3.8',
-    install_requires=['numpy', 'tiffwrite>=2022.10.0'],
+    install_requires=['numpy', 'tqdm', 'pyyaml', 'tiffwrite>=2022.10.1'],
     entry_points={'console_scripts': ['iss2tiff=issfile:main']}
 )
