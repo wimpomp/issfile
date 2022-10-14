@@ -90,7 +90,7 @@ class IssFile:
 
         data, metadata = np.vstack(data), np.vstack(metadata)
         times = metadata[:, 0].astype(int)
-        index = np.zeros(max(times) // self.cycle_time + 1, int)
+        index = np.zeros(int(max(times)) // self.cycle_time + 1, int)
         for i, j in enumerate(times):
             index[j // self.cycle_time] = i
         return data[index], metadata[index].T
