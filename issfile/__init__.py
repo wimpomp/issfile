@@ -11,6 +11,33 @@ from yaml import safe_load
 from argparse import ArgumentParser
 
 
+class TiffFile(IJTiffFile):
+    """ Modify the tiff writer so that it can read from the .iss-pt file by itself in parallel processes. """
+    def __init__(self, *args, iss, bar, **kwargs):
+        if 'processes' not in kwargs:
+            kwargs['processes'] = 'all'
+        super().__init__(*args, **kwargs)
+        self.iss = iss
+        self.bar = bar
+
+    def __getstate__(self):
+        return {key: value for key, value in self.__dict__.items() if key != 'bar'}
+
+    def update(self):
+        self.bar.update()
+
+    def compress_frame(self, frame):
+        if frame[0]:
+            frame, metadata = self.iss.get_carpet(*frame[1:])
+            ifd, offsets = super().compress_frame(frame.astype(self.dtype))
+            # ISS = 9*19*19 = 3249; list of t, x, y, z for each row in carpet
+            ifd[3249] = Tag('float', metadata.T.flatten())
+            return ifd, offsets
+        else:
+            frame = self.iss.get_image(*frame[1:])
+            return super().compress_frame(frame.astype(self.dtype))
+
+
 class IssFile:
     def __init__(self, file, version=388):
         self.file = file
@@ -65,6 +92,7 @@ class IssFile:
         frame = c + 2 * t * self.shape[2]
         frame_bytes = self.shape[0] * self.shape[1] * self.delta
         data = []
+        # TODO: RuntimeWarning: overflow encountered in long_scalars for big files in next line
         for address in range(frame * frame_bytes, (frame + 1) * frame_bytes, self.delta):
             self.data.seek(address)
             data.append(unpack('<I', self.data.read(4)))
@@ -94,46 +122,17 @@ class IssFile:
             index[int(round(j / self.cycle_time))] = i
         return data[index], metadata[index].T
 
-    @property
-    def tiff_writer(self):
-        class TiffFile(IJTiffFile):
-            """ Modify the tiff writer so that it can read from the .iss-pt file by itself in parallel processes. """
-            def __init__(self, *args, iss, bar, **kwargs):
-                if 'processes' not in kwargs:
-                    kwargs['processes'] = 'all'
-                super().__init__(*args, **kwargs)
-                self.iss = pickle.dumps(iss)
-                self.bar = bar
-
-            def update(self):
-                self.bar.update()
-
-            def compress_frame(self, frame):
-                if isinstance(self.iss, bytes):
-                    self.iss = pickle.loads(self.iss)
-                if frame[0]:
-                    frame, metadata = self.iss.get_carpet(*frame[1:])
-                    ifd, offsets = super().compress_frame(frame.astype(self.dtype))
-                    # ISS = 9*19*19 = 3249; list of t, x, y, z for each row in carpet
-                    ifd[3249] = Tag('float', metadata.T.flatten())
-                    return ifd, offsets
-                else:
-                    frame = self.iss.get_image(*frame[1:])
-                    return super().compress_frame(frame.astype(self.dtype))
-
-        return TiffFile
-
     def save_images_as_tiff(self, file):
         with tqdm(total=self.shape[2] * self.shape[3], desc='Writing  images') as bar:
-            with self.tiff_writer(file, (self.shape[2], 1, self.shape[3]), iss=self, bar=bar,
-                                  pxsize=self.pxsize, comment=ET.tostring(self.metadata)) as tif:
+            with TiffFile(file, (self.shape[2], 1, self.shape[3]), iss=self, bar=bar,
+                          pxsize=self.pxsize, comment=ET.tostring(self.metadata)) as tif:
                 for c, t in product(range(self.shape[2]), range(self.shape[3])):
                     tif.save(np.array((0, c, t)), c, 0, t)
 
     def save_carpets_as_tiff(self, file):
         with tqdm(total=self.shape[2] * self.shape[4], desc='Writing carpets') as bar:
-            with self.tiff_writer(file, (self.shape[2], 1, self.shape[4]), iss=self, bar=bar,
-                                  pxsize=self.orbit_pxsize, comment=ET.tostring(self.metadata)) as tif:
+            with TiffFile(file, (self.shape[2], 1, self.shape[4]), iss=self, bar=bar,
+                          pxsize=self.orbit_pxsize, comment=ET.tostring(self.metadata)) as tif:
                 for c, t in product(range(self.shape[2]), range(self.shape[4])):
                     tif.save(np.array((1, c, t)), c, 0, t)
 
