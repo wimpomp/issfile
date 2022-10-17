@@ -19,6 +19,6 @@ setuptools.setup(
         'Operating System :: OS Independent',
     ],
     python_requires='>=3.8',
-    install_requires=['numpy', 'tqdm', 'pyyaml', 'tiffwrite>=2022.10.1'],
+    install_requires=['numpy', 'tqdm', 'pyyaml', 'tiffwrite>=2022.10.2'],
     entry_points={'console_scripts': ['iss2tiff=issfile:main']}
 )
