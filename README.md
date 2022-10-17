@@ -21,7 +21,7 @@ Metadata is also saved in the tiffs in the description tag.
 
     with IssFile(file) as iss:
         image = iss.get_image(c=1, t=5)
-        carpet = iss.get_carpet(c=1, t=5)
+        carpet, (time, x, y, z) = iss.get_carpet(c=1, t=5)
     
         plt.figure()
         plt.imshow(image)

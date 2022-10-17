@@ -17,7 +17,7 @@ class TiffFile(IJTiffFile):
         if 'processes' not in kwargs:
             kwargs['processes'] = 'all'
         super().__init__(*args, **kwargs)
-        self.iss = iss
+        self.iss = pickle.dumps(iss)  # force iss to be transferred to other processes in pickled state
         self.bar = bar
 
     def __getstate__(self):
@@ -27,6 +27,8 @@ class TiffFile(IJTiffFile):
         self.bar.update()
 
     def compress_frame(self, frame):
+        if isinstance(self.iss, bytes):
+            self.iss = pickle.loads(self.iss)
         if frame[0]:
             frame, metadata = self.iss.get_carpet(*frame[1:])
             ifd, offsets = super().compress_frame(frame.astype(self.dtype))
@@ -89,10 +91,9 @@ class IssFile:
     def get_image(self, c, t):
         assert c < self.shape[2] and t < self.shape[3], \
             f'carpet {c = }, {t = } not in shape {self.shape[2]}, {self.shape[3]}'
-        frame = c + 2 * t * self.shape[2]
+        frame = int(c) + 2 * int(t) * self.shape[2]
         frame_bytes = self.shape[0] * self.shape[1] * self.delta
         data = []
-        # TODO: RuntimeWarning: overflow encountered in long_scalars for big files in next line
         for address in range(frame * frame_bytes, (frame + 1) * frame_bytes, self.delta):
             self.data.seek(address)
             data.append(unpack('<I', self.data.read(4)))
@@ -101,7 +102,7 @@ class IssFile:
     def get_carpet(self, c, t, min_n_lines=1):
         assert c < self.shape[2] and t < self.shape[4], \
             f'carpet {c = }, {t = } not in shape {self.shape[2]}, {self.shape[4]}'
-        frame = c + (2 * t + 1) * self.shape[2]
+        frame = int(c) + (2 * int(t) + 1) * self.shape[2]
         frame_bytes = self.shape[0] * self.shape[1] * self.delta
         data, metadata = [], []
         self.data.seek(frame * frame_bytes)
