@@ -2,6 +2,8 @@ import re
 import pickle
 import xml.etree.ElementTree as ET
 import numpy as np
+from glob import glob
+from pathlib import Path
 from zipfile import ZipFile
 from struct import unpack
 from tiffwrite import IJTiffFile, Tag
@@ -9,6 +11,10 @@ from tqdm.auto import tqdm
 from itertools import product
 from yaml import safe_load
 from argparse import ArgumentParser
+from atexit import register
+from matplotlib import pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+from ._version import __version__, __git_commit_hash__
 
 
 class TiffFile(IJTiffFile):
@@ -39,6 +45,12 @@ class TiffFile(IJTiffFile):
             frame = self.iss.get_image(*frame[1:])
             return super().compress_frame(frame.astype(self.dtype))
 
+    def clean(self):
+        try:
+            self.iss.close()
+        except Exception:
+            pass
+
 
 class IssFile:
     def __init__(self, file, version=388):
@@ -57,7 +69,8 @@ class IssFile:
         self.exposure_time = float(self.metadata.find('FrameIntervalTime').text)
         self.pxsize = float(self.metadata.find('Boundary').find('FrameWidth').text) / self.shape[0]
         self.alba_metadata = safe_load('\n'.join([IssFile.parse_line(line)
-            for line in self.metadata.find('AlbaSystemSettings').find('withComments').text.splitlines()]))
+                                                  for line in self.metadata.find('AlbaSystemSettings')
+                                                                  .find('withComments').text.splitlines()]))
         particle_tracking = self.alba_metadata['ParticleTracking']
         self.points_per_orbit = particle_tracking['ScanCirclePointCount']
         self.orbits_per_cycle = particle_tracking['OrbitCountPerTrack']
@@ -67,6 +80,7 @@ class IssFile:
         self.data_bytes_len = self.zip.getinfo('data/PrimaryDecayData.bin').file_size
         self.delta = self.data_bytes_len // (self.shape[0] * self.shape[1] * self.shape[2] *
                                              (self.shape[3] + self.shape[4]))
+        self._carpet_t0 = [0]
 
     def __enter__(self):
         return self
@@ -81,6 +95,7 @@ class IssFile:
         self.__dict__.update(state)
         self.zip = ZipFile(self.file)
         self.data = self.zip.open('data/PrimaryDecayData.bin')
+        register(self.close)
 
     def close(self):
         try:
@@ -121,21 +136,31 @@ class IssFile:
         index = np.zeros(int(round(max(metadata[:, 0]) / self.cycle_time)) + 1, int)
         for i, j in enumerate(metadata[:, 0]):
             index[int(round(j / self.cycle_time))] = i
+        metadata[:, 0] += self.get_carpet_t0(t, metadata.shape[0])
         return data[index], metadata[index].T
 
+    def get_carpet_t0(self, t, cycles=None):
+        if t + 1 > len(self._carpet_t0):
+            cycles = cycles or self.get_carpet(0, t - 1)[1].shape[1]
+            t0 = self.get_carpet_t0(t - 1)
+            self._carpet_t0.append(t0 + cycles * self.cycle_time + self.exposure_time)
+        return self._carpet_t0[t]
+
     def save_images_as_tiff(self, file):
-        with tqdm(total=self.shape[2] * self.shape[3], desc='Writing  images') as bar:
-            with TiffFile(file, (self.shape[2], 1, self.shape[3]), iss=self, bar=bar,
-                          pxsize=self.pxsize, comment=ET.tostring(self.metadata)) as tif:
-                for c, t in product(range(self.shape[2]), range(self.shape[3])):
-                    tif.save(np.array((0, c, t)), c, 0, t)
+        if self.shape[3]:
+            with tqdm(total=self.shape[2] * self.shape[3], desc='Writing  images') as bar:
+                with TiffFile(file, (self.shape[2], 1, self.shape[3]), iss=self, bar=bar,
+                              pxsize=self.pxsize, comment=ET.tostring(self.metadata)) as tif:
+                    for c, t in product(range(self.shape[2]), range(self.shape[3])):
+                        tif.save((0, c, t), c, 0, t)
 
     def save_carpets_as_tiff(self, file):
-        with tqdm(total=self.shape[2] * self.shape[4], desc='Writing carpets') as bar:
-            with TiffFile(file, (self.shape[2], 1, self.shape[4]), iss=self, bar=bar,
-                          pxsize=self.orbit_pxsize, comment=ET.tostring(self.metadata)) as tif:
-                for c, t in product(range(self.shape[2]), range(self.shape[4])):
-                    tif.save(np.array((1, c, t)), c, 0, t)
+        if self.shape[4]:
+            with tqdm(total=self.shape[2] * self.shape[4], desc='Writing carpets') as bar:
+                with TiffFile(file, (self.shape[2], 1, self.shape[4]), iss=self, bar=bar,
+                              pxsize=self.orbit_pxsize, comment=ET.tostring(self.metadata)) as tif:
+                    for c, t in product(range(self.shape[2]), range(self.shape[4])):
+                        tif.save((1, c, t), c, 0, t)
 
     @staticmethod
     def parse_line(line):
@@ -146,6 +171,47 @@ class IssFile:
         line = re.sub(r'\s*=\s*', r' ', line)
         return line
 
+    def get_txyzi(self, c):
+        data, metadata = zip(*[self.get_carpet(c, t) for t in range(self.shape[4])])
+        txyz = np.hstack(metadata)
+        idx = np.all(txyz[1:] != 0, 0)
+        return *txyz[:, idx], np.hstack([d.sum(1) for d in data])[idx]
+
+    def save_plot(self, file):
+        if self.shape[4]:
+            with PdfPages(file) as pdf:
+                plt.figure(figsize=(8.3, 11.7))
+                plt.subplot(3, 1, 1)
+                for c, color in zip(range(self.shape[2]), 'rgbm'):
+                    t, x, y, z, intensity = self.get_txyzi(c)
+                    plt.plot(t / 1000, intensity, color)
+                plt.xlabel('time (s)')
+                plt.ylabel('sum intensity (counts)')
+                plt.legend([f'channel {i}' for i in range(self.shape[2])])
+                plt.subplot(3, 1, 2)
+                for i, color in zip((x, y, z), 'rgb'):
+                    plt.plot(t / 1000, i, color)
+                plt.xlabel('time (s)')
+                plt.ylabel('position (μm)')
+                plt.legend('xyz')
+                plt.subplot(3, 3, 7)
+                plt.plot(x, y, 'k')
+                plt.axis('equal')
+                plt.xlabel('x (μm)')
+                plt.ylabel('y (μm)')
+                plt.subplot(3, 3, 8)
+                plt.plot(x, z, 'k')
+                plt.axis('equal')
+                plt.xlabel('x (μm)')
+                plt.ylabel('z (μm)')
+                plt.subplot(3, 3, 9)
+                plt.plot(y, z, 'k')
+                plt.axis('equal')
+                plt.xlabel('y (μm)')
+                plt.ylabel('z (μm)')
+                plt.tight_layout()
+                pdf.savefig()
+
 
 def main():
     parser = ArgumentParser(description='Convert .iss-pt files into .tiff files.')
@@ -154,10 +220,11 @@ def main():
                         help='version of VistaVision with which the .iss-pt was written, default: 388')
     args = parser.parse_args()
 
-    for file in args.files:
+    for file in [Path(file) for files in args.files for file in glob(files)]:
         with IssFile(file, args.version) as iss_file:
-            iss_file.save_images_as_tiff(file.replace('.iss-pt', '.tif'))
-            iss_file.save_carpets_as_tiff(file.replace('.iss-pt', '.carpet.tif'))
+            iss_file.save_images_as_tiff(file.with_suffix('.tif'))
+            iss_file.save_carpets_as_tiff(file.with_suffix('.carpet.tif'))
+            iss_file.save_plot(file.with_suffix('.pdf'))
 
 
 if __name__ == '__main__':
