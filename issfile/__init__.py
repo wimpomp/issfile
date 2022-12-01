@@ -152,7 +152,7 @@ class IssFile:
                 with TiffFile(file, (self.shape[2], 1, self.shape[3]), iss=self, bar=bar,
                               pxsize=self.pxsize, comment=ET.tostring(self.metadata)) as tif:
                     for c, t in product(range(self.shape[2]), range(self.shape[3])):
-                        tif.save((0, c, t), c, 0, t)
+                        tif.save(np.array((0, c, t)), c, 0, t)
 
     def save_carpets_as_tiff(self, file):
         if self.shape[4]:
@@ -160,7 +160,7 @@ class IssFile:
                 with TiffFile(file, (self.shape[2], 1, self.shape[4]), iss=self, bar=bar,
                               pxsize=self.orbit_pxsize, comment=ET.tostring(self.metadata)) as tif:
                     for c, t in product(range(self.shape[2]), range(self.shape[4])):
-                        tif.save((1, c, t), c, 0, t)
+                        tif.save(np.array((1, c, t)), c, 0, t)
 
     @staticmethod
     def parse_line(line):
