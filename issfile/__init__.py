@@ -68,6 +68,7 @@ class IssFile:
         self.shape = size_x, size_y, size_c, size_t // 2 + size_t % 2, size_t // 2
         self.exposure_time = float(self.metadata.find('FrameIntervalTime').text)
         self.pxsize = float(self.metadata.find('Boundary').find('FrameWidth').text) / self.shape[0]
+        self.time_interval = float(self.metadata.find('TimeSeries').find('TimeSeriesIntervalTime').text)
         self.alba_metadata = safe_load('\n'.join([IssFile.parse_line(line)
                                                   for line in self.metadata.find('AlbaSystemSettings')
                                                                   .find('withComments').text.splitlines()]))
@@ -114,23 +115,20 @@ class IssFile:
             data.append(unpack('<I', self.data.read(4)))
         return np.reshape(data, self.shape[:2])
 
-    def get_carpet(self, c, t, min_n_lines=1):
+    def get_carpet(self, c, t):
         assert c < self.shape[2] and t < self.shape[4], \
             f'carpet {c = }, {t = } not in shape {self.shape[2]}, {self.shape[4]}'
         frame = int(c) + (2 * int(t) + 1) * self.shape[2]
         frame_bytes = self.shape[0] * self.shape[1] * self.delta
         data, metadata = [], []
         self.data.seek(frame * frame_bytes)
-        for i in range(frame_bytes // (2 * self.points_per_orbit * self.orbits_per_cycle)):
+        for i in range(int(1000 * self.time_interval / self.cycle_time)):
             line = [unpack('<H', self.data.read(2))[0] for _ in range(self.points_per_orbit * self.orbits_per_cycle)]
-            if np.any(line) or i < min_n_lines:
-                data.append(line)
-                if self.version >= 388:
-                    metadata.append(unpack('<ffff', self.data.read(16)))
-                else:
-                    metadata.append([i * self.cycle_time, 0, 0, 0])
+            data.append(line)
+            if self.version >= 388:
+                metadata.append(unpack('<ffff', self.data.read(16)))
             else:
-                break
+                metadata.append([i * self.cycle_time, 0, 0, 0])
 
         data, metadata = np.vstack(data), np.vstack(metadata)
         index = np.zeros(int(round(max(metadata[:, 0]) / self.cycle_time)) + 1, int)

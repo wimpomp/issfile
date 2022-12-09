@@ -1,7 +1,7 @@
 import os
 import setuptools
 
-version = '2022.12.0'
+version = '2022.12.1'
 
 with open('README.md', 'r') as fh:
     long_description = fh.read()
