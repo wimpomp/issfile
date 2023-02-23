@@ -3,7 +3,7 @@ Library for opening [ISS](https://iss.com) files and their conversion to tiff.
 
 ## Installation
 
-    pip install git+https://github.com/wimpomp/issfile.git
+    pip install issfile
 
 ## Converting .iss-pt files to .tiff files
 
@@ -11,8 +11,8 @@ Library for opening [ISS](https://iss.com) files and their conversion to tiff.
 
     iss2tiff file.iss-pt
 
-this will create file.tiff and file.carpet.tiff containing images and carpets respectively.
-Metadata is also saved in the tiffs in the description tag.
+this will create file.tif and file.carpet.tif containing images and carpets respectively.
+Metadata is also saved in the tiffs in the description tag. A pdf with some plots is created too.
 
 ## Use as a library
 

@@ -53,7 +53,7 @@ class TiffFile(IJTiffFile):
 
 
 class IssFile:
-    def __init__(self, file, version=388):
+    def __init__(self, file, version=416):
         self.file = file
         self.version = version
         self.zip = ZipFile(self.file)
@@ -122,20 +122,25 @@ class IssFile:
         frame_bytes = self.shape[0] * self.shape[1] * self.delta
         data, metadata = [], []
         self.data.seek(frame * frame_bytes)
-        for i in range(int(1000 * self.time_interval / self.cycle_time)):
+        cycles = int(1000 * self.time_interval / self.cycle_time)
+        for i in range(cycles):
             line = [unpack('<H', self.data.read(2))[0] for _ in range(self.points_per_orbit * self.orbits_per_cycle)]
             data.append(line)
             if self.version >= 388:
                 metadata.append(unpack('<ffff', self.data.read(16)))
             else:
-                metadata.append([i * self.cycle_time, 0, 0, 0])
-
-        data, metadata = np.vstack(data), np.vstack(metadata)
-        index = np.zeros(int(round(max(metadata[:, 0]) / self.cycle_time)) + 1, int)
-        for i, j in enumerate(metadata[:, 0]):
-            index[int(round(j / self.cycle_time))] = i
-        metadata[:, 0] += self.get_carpet_t0(t, metadata.shape[0])
-        return data[index], metadata[index].T
+                metadata.append([(i + 1) * self.cycle_time, 0, 0, 0])
+        data, metadata = np.vstack(data), np.vstack(metadata).T
+        if self.version >= 416:
+            index = np.argsort(metadata[0])
+            index = index[metadata[0, index] > 0]
+        else:
+            index = np.zeros(int(round(max(metadata[0]) / self.cycle_time)) + 1, int)
+            for i, j in enumerate(metadata[0]):
+                index[int(round(j / self.cycle_time)) - 1] = i
+            index = index[metadata[0, index] > 0]
+            metadata[0] += self.get_carpet_t0(t, cycles)
+        return data[index], metadata[:, index]
 
     def get_carpet_t0(self, t, cycles=None):
         if t + 1 > len(self._carpet_t0):
@@ -214,8 +219,8 @@ class IssFile:
 def main():
     parser = ArgumentParser(description='Convert .iss-pt files into .tiff files.')
     parser.add_argument('files', help='files to be converted', nargs='*')
-    parser.add_argument('-v', '--version', type=int, default=388,
-                        help='version of VistaVision with which the .iss-pt was written, default: 388')
+    parser.add_argument('-v', '--version', type=int, default=416,
+                        help='version of VistaVision with which the .iss-pt was written, default: 416')
     args = parser.parse_args()
 
     for file in [Path(file) for files in args.files for file in glob(files)]:
